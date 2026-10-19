@@ -7,7 +7,7 @@ import {
   Star, UserCog, ClipboardList, Briefcase, LogOut, UserCircle, Percent,
   ArrowLeft, ArrowRight, HeartHandshake, MessageSquare,
   ChevronLeft, PlaneTakeoff, PenLine, AlertTriangle, ListChecks,
-  PieChart as PieChartIcon, BarChart3, Printer
+  PieChart as PieChartIcon, BarChart3, Printer, Upload, Mail, Copy, Building2
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
@@ -242,6 +242,8 @@ const DEVIS_TARIF_REPAS = 18;
 const DEVIS_TARIF_HOTEL = 120;
 const DEVIS_TVA = 0.2; // 20 %, TTC = HT × 1.2 dans le classeur
 const DEVIS_CODE_DOCUMENT = "CPSL/CEPS/R3-EN-02"; // code qualité fixe de la trame
+// Formats proposés pour une « proposition d'intervention » du devis.
+const DEVIS_FORMATS_INTERVENTION = ["Atelier", "Conférence", "Formation", "Accompagnement de projet", "Stand / animation", "Webinaire", "Bilan / consultation", "Autre"];
 const DEVIS_STATUT_META = {
   brouillon: { label: "Brouillon", color: MUTED, Icon: PenLine },
   en_cours_validation: { label: "En cours de validation", color: PURPLE, Icon: CircleDashed },
@@ -273,7 +275,11 @@ function calculDevis(d) {
 
   const interventionHT = Math.round((lignesCout + lignesCout * margePct) * 100) / 100; // Récap!E8
   const deplacementHT = Math.round((totalDeplacementBrut + totalDeplacementBrut * securitePct) * 100) / 100; // Récap!E13
-  const totalHT = Math.round((interventionHT + deplacementHT) * 100) / 100; // Récap!E16
+  // Propositions d'intervention chiffrées au forfait (optionnel) : elles
+  // s'ajoutent au total sans marge. Sans montant, le calcul reste
+  // strictement identique au classeur Excel de référence.
+  const propositionsHT = Math.round((d.propositions || []).reduce((s, p) => s + (Number(p.montantHT) || 0), 0) * 100) / 100;
+  const totalHT = Math.round((interventionHT + deplacementHT + propositionsHT) * 100) / 100; // Récap!E16 (+ forfaits)
   const totalTTC = Math.round(totalHT * (1 + DEVIS_TVA) * 100) / 100; // Récap!G16
 
   const duree = Number(d.dureeSessionJours) || 0;
@@ -285,6 +291,7 @@ function calculDevis(d) {
     margePct, securitePct,
     interventionHT, interventionTTC: Math.round(interventionHT * 1.2 * 100) / 100,
     deplacementHT, deplacementTTC: Math.round(deplacementHT * 1.2 * 100) / 100,
+    propositionsHT, propositionsTTC: Math.round(propositionsHT * 1.2 * 100) / 100,
     totalHT, totalTTC,
     moyenneJournaliereHT,
   };
@@ -1301,15 +1308,52 @@ function MissingBadge({ missing }) {
 // affichée partout où l'évènement apparaît pour l'équipe de coordination.
 function AlertBadge({ alerte }) {
   if (!alerte) return null;
+  const c = alerte.traite ? GREEN : RED;
+  const suivi = alerte.traite ? ` — traitée par ${alerte.traite.par}` : alerte.lu ? ` — lue par ${alerte.lu.par}` : "";
   return (
     <span
-      title={`${alerte.auteur} (${fmtDate(alerte.date)}) : ${alerte.message}`}
+      title={`${alerte.auteur} (${fmtDate(alerte.date)}) : ${alerte.message}${suivi}`}
       className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded max-w-[180px]"
-      style={{ background: RED + "1f", color: RED, border: `1px solid ${RED}66` }}
+      style={{ background: c + "1f", color: c, border: `1px solid ${c}66` }}
     >
-      <AlertTriangle size={11} className="shrink-0" />
+      {alerte.traite ? <CheckCircle2 size={11} className="shrink-0" /> : <AlertTriangle size={11} className="shrink-0" />}
       <span className="truncate">{alerte.message}</span>
     </span>
+  );
+}
+
+// Rôles qui accusent réception d'une alerte (lue / traitée).
+const ALERT_ACK_ROLES = new Set(["chef_projet", "chef_equipe"]);
+
+// Une ligne d'alerte dans les listes « Alertes » (Tableau de bord, Mes
+// projets, Pilotage), avec le suivi lu / traité par le·la chef·fe de projet.
+function AlertListItem({ e, proj, onEdit, onAck, onClear }) {
+  const a = e.alerte;
+  const traite = !!a.traite;
+  const lu = !!a.lu;
+  const color = traite ? GREEN : RED;
+  return (
+    <li className="flex items-start gap-2 text-xs rounded-md px-2 py-1.5" style={{ background: traite ? GREEN + "10" : "transparent", opacity: traite ? 0.85 : 1 }}>
+      {traite ? <CheckCircle2 size={13} style={{ color }} className="shrink-0 mt-0.5" /> : <AlertTriangle size={13} style={{ color }} className="shrink-0 mt-0.5" />}
+      <span className="flex-1 min-w-0">
+        <span className="font-semibold">{a.auteur}</span>{proj?.nom ? ` — ${proj.nom}` : ""} ({fmtDate(e.date)}) : {a.message}
+        {(lu || traite) && (
+          <span className="block mt-0.5 text-[10.5px]" style={{ color: traite ? GREEN : MUTED }}>
+            {traite ? `✓ Traitée par ${a.traite.par} le ${fmtDate(a.traite.date)}` : `Lue par ${a.lu.par} le ${fmtDate(a.lu.date)}`}
+          </span>
+        )}
+      </span>
+      {onAck && !lu && !traite && (
+        <button onClick={() => onAck(e.id, "lu")} className="text-[11px] font-semibold px-2 py-1 rounded shrink-0 border" style={{ borderColor: LINE, color: CARE_DARK, background: "#fff" }}>Marquer lue</button>
+      )}
+      {onAck && !traite && (
+        <button onClick={() => onAck(e.id, "traite")} className="text-[11px] font-semibold px-2 py-1 rounded shrink-0 text-white" style={{ background: GREEN }}>Marquer traitée</button>
+      )}
+      {onAck && traite && onClear && (
+        <button onClick={() => onClear(e.id)} className="text-[11px] font-medium px-2 py-1 rounded shrink-0" style={{ color: MUTED }} title="Retirer l'alerte de la liste">Archiver</button>
+      )}
+      {onEdit && <button onClick={() => onEdit(e)} className="text-xs font-medium shrink-0 py-1" style={{ color: CARE_DARK }}>Ouvrir →</button>}
+    </li>
   );
 }
 
@@ -1857,6 +1901,7 @@ export default function App() {
   const [tempsTravail, setTempsTravail] = useState([]);
   const [financeEntries, setFinanceEntries] = useState(() => FINANCE_SEED.map((e, i) => ({ id: `FIN${i + 1}`, ...e })));
   const [devisListe, setDevisListe] = useState([]);
+  const [crmClients, setCrmClients] = useState([]);
   const [selectedDevisId, setSelectedDevisId] = useState(null);
   const [financeObjectifs, setFinanceObjectifs] = useState(FINANCE_OBJECTIFS_DEFAULT);
   // Capacité ETP (équivalent temps plein) que le·la chef·fe d'équipe
@@ -1912,6 +1957,10 @@ export default function App() {
         const dv = await window.storage?.get("coord-devis");
         if (dv?.value) setDevisListe(JSON.parse(dv.value));
       } catch (err) { /* pas encore de suivi financier personnalisé -> on garde le seed */ }
+      try {
+        const crm = await window.storage?.get("coord-crm");
+        if (crm?.value) setCrmClients(JSON.parse(crm.value));
+      } catch (err) { /* annuaire CRM encore vide */ }
       setDataReady(true);
     })();
   }, []);
@@ -1946,6 +1995,16 @@ export default function App() {
   const confirmDeleteTache = () => {
     persistTaches(taches.filter((t) => t.id !== confirmDeleteTacheId));
     setConfirmDeleteTacheId(null);
+  };
+  // Suppression d'un compte (doublon, départ…) — réservée au·à la chef·fe
+  // d'équipe depuis Pilotage › Équipe enregistrée. On ne peut pas
+  // supprimer son propre compte.
+  const [confirmDeleteAccountId, setConfirmDeleteAccountId] = useState(null);
+  const confirmDeleteAccount = () => {
+    if (!confirmDeleteAccountId || confirmDeleteAccountId === session?.accountId) { setConfirmDeleteAccountId(null); return; }
+    persistAccounts(accounts.filter((a) => a.id !== confirmDeleteAccountId));
+    setConfirmDeleteAccountId(null);
+    flash("Compte supprimé");
   };
 
   const persistTempsTravail = useCallback((next) => {
@@ -2026,6 +2085,42 @@ export default function App() {
     setDevisListe(next);
     window.storage?.set("coord-devis", JSON.stringify(next)).catch(() => {});
   }, []);
+
+  // ---- CRM : annuaire des clients ----
+  const persistCrm = useCallback((next) => {
+    setCrmClients(next);
+    window.storage?.set("coord-crm", JSON.stringify(next)).catch(() => {});
+  }, []);
+  const saveCrmClient = (c) => {
+    if (c.id) persistCrm(crmClients.map((x) => (x.id === c.id ? { ...c, modifieLe: today, modifiePar: session?.nom } : x)));
+    else persistCrm([...crmClients, { ...c, id: `CL${Date.now()}`, creeLe: today, creePar: session?.nom }]);
+    flash(c.id ? "Fiche client mise à jour" : "Client ajouté à l'annuaire");
+  };
+  const [confirmDeleteCrmId, setConfirmDeleteCrmId] = useState(null);
+  const importCrmClients = (rows, dupMode, source) => {
+    const next = [...crmClients];
+    const index = new Map(next.map((c, i) => [crmDupKey(c), i]));
+    let added = 0, updated = 0, skipped = 0;
+    rows.forEach((r, n) => {
+      const k = crmDupKey(r);
+      if (index.has(k)) {
+        if (dupMode === "update") {
+          const i = index.get(k);
+          const cur = next[i];
+          const merged = { ...cur };
+          Object.entries(r).forEach(([key, v]) => { if (v && !cur[key]) merged[key] = v; });
+          next[i] = merged; updated++;
+        } else skipped++;
+        return;
+      }
+      const c = { statut: "prospect", ...r, id: `CL${Date.now()}${n}`, creeLe: today, creePar: session?.nom, source };
+      index.set(k, next.length);
+      next.push(c); added++;
+    });
+    persistCrm(next);
+    flash(`${added} contact(s) importé(s)`);
+    return { added, updated, skipped };
+  };
 
   const createDevis = (payload) => {
     const id = `DEV${Date.now()}`;
@@ -2202,12 +2297,14 @@ export default function App() {
     if (Array.isArray(data.tempsTravail)) persistTempsTravail(data.tempsTravail);
     if (Array.isArray(data.taches)) persistTaches(data.taches);
     if (Array.isArray(data.financeEntries)) persistFinanceEntries(data.financeEntries);
+    if (Array.isArray(data.devis)) persistDevisListe(data.devis);
+    if (Array.isArray(data.crmClients)) persistCrm(data.crmClients);
     if (data.financeObjectifs && typeof data.financeObjectifs === "object") {
       setFinanceObjectifs(data.financeObjectifs);
       window.storage?.set("coord-finance-objectifs", JSON.stringify(data.financeObjectifs)).catch(() => {});
     }
     flash("Sauvegarde restaurée avec succès");
-  }, [persistEvents, persistProjects, persistIntervenants, persistTempsTravail, persistTaches, persistFinanceEntries]);
+  }, [persistEvents, persistProjects, persistIntervenants, persistTempsTravail, persistTaches, persistFinanceEntries, persistDevisListe, persistCrm]);
 
   // Créer un nouveau projet, le valider une fois confirmé par un financeur,
   // ou modifier son budget : réservé aux chef·fes de projet et à la
@@ -2411,6 +2508,13 @@ export default function App() {
   const clearAlert = (id) => {
     persistEvents(events.map((e) => (e.id === id ? { ...e, alerte: null } : e)));
   };
+  // Accusé de lecture / de traitement d'une alerte par le·la chef·fe de projet.
+  const ackAlert = (id, kind) => {
+    if (!session) return;
+    persistEvents(events.map((e) => (e.id === id && e.alerte ? { ...e, alerte: { ...e.alerte, [kind]: { par: session.nom, date: today } } } : e)));
+    flash(kind === "traite" ? "Alerte marquée comme traitée" : "Alerte marquée comme lue");
+  };
+  const canAckAlerts = !!session && ALERT_ACK_ROLES.has(session.role);
 
   // Les intervenant·es suivent et commentent leurs actions mais ne
   // modifient pas la planification elle-même (date, lieu, projet…) —
@@ -2546,6 +2650,7 @@ export default function App() {
     { id: "appels_projet", label: "Appels à projet en cours", icon: Send },
     { id: "finance", label: "Suivi financier", icon: PieChartIcon },
     { id: "devis", label: "Devis", icon: FileSignature },
+    { id: "crm", label: "Clients (CRM)", icon: Building2 },
     { id: "dossiers_refuses", label: "Dossiers refusés", icon: Archive },
     { id: "people", label: "Intervenants", icon: Users },
     { id: "workload", label: "Plan de charge", icon: Gauge },
@@ -2578,7 +2683,8 @@ export default function App() {
   const canSeeWorkload = !LOCKS_ENABLED ? !!session : (session && WORKLOAD_ROLES.has(session.role));
   const canSeePeople = !LOCKS_ENABLED ? !!session : (session && PEOPLE_ROLES.has(session.role));
   const canSeeFinance = !LOCKS_ENABLED ? !!session : (session && FINANCE_ROLES.has(session.role));
-  const navBase = NAV_BASE.filter((n) => (n.id !== "workload" || canSeeWorkload) && (n.id !== "people" || canSeePeople) && (n.id !== "finance" || canSeeFinance) && (n.id !== "devis" || canSeeFinance) && (n.id !== "dossiers_refuses" || canSeeFinance));
+  const canSeeCrm = !LOCKS_ENABLED ? !!session : (session && CRM_ROLES.has(session.role));
+  const navBase = NAV_BASE.filter((n) => (n.id !== "workload" || canSeeWorkload) && (n.id !== "people" || canSeePeople) && (n.id !== "finance" || canSeeFinance) && (n.id !== "devis" || canSeeFinance) && (n.id !== "dossiers_refuses" || canSeeFinance) && (n.id !== "crm" || canSeeCrm));
   // « Gérer mon temps » et « Sauvegarder les données » restent toujours
   // en toute dernière position par défaut, pour que les onglets de
   // pilotage/planning collectif passent en premier.
@@ -2804,7 +2910,7 @@ export default function App() {
       </header>
 
       {/* légende des statuts, toujours visible */}
-      <div className="border-b" style={{ background: "#fff", borderColor: LINE }}>
+      <div className="border-b status-legend" style={{ background: "#fff", borderColor: LINE }}>
         <div className="max-w-[1450px] mx-auto px-5 py-2 flex flex-wrap items-center gap-4 text-xs">
           <span className="font-semibold uppercase tracking-wide text-[10px]" style={{ color: MUTED }}>Statuts :</span>
           {STATUS_ORDER.map((k) => (
@@ -2830,10 +2936,11 @@ export default function App() {
           body, .base-text { background: #fff !important; }
           * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
           .print-only { display: block !important; }
+          body:has(.devis-print) .app-print-head, body:has(.devis-print) .status-legend { display: none !important; }
         }
         .print-only { display: none; }
       `}</style>
-      <div className="print-only max-w-[1450px] mx-auto px-5 pt-6">
+      <div className="print-only app-print-head max-w-[1450px] mx-auto px-5 pt-6">
         <div className="text-xs mono uppercase tracking-wide" style={{ color: MUTED }}>
           Institut Pasteur de Lille — Coordination de projets · Imprimé le {fmtDate(today)}
         </div>
@@ -2852,6 +2959,7 @@ export default function App() {
                 onSelectProject={(id) => { setFProjet(id); setTab("events"); }}
                 onEditEvent={openEdit} onSetStatut={setEventStatut} canEditPlanning={canEditPlanning}
                 taches={taches} myIntervenantCode={linkedIntervenantCode} onRespondDelegation={respondDelegation}
+                onAckAlert={canAckAlerts ? ackAlert : null} onClearAlert={clearAlert}
               />
             )}
 
@@ -2897,6 +3005,13 @@ export default function App() {
                 projects={scopedProjects}
                 canManageProjects={canManageProjects} onUpdateBudget={updateProjectBudget} onUpdateStatutFinancement={updateProjectStatutFinancement}
                 onGoToProject={(id) => { setExpandedProject(id); setTab("projects"); }}
+              />
+            )}
+
+            {tab === "crm" && canSeeCrm && (
+              <CrmTab
+                clients={crmClients} session={session}
+                onSave={saveCrmClient} onRequestDelete={setConfirmDeleteCrmId} onImport={importCrmClients}
               />
             )}
 
@@ -2959,6 +3074,7 @@ export default function App() {
                 session={session} projects={projects} events={events} intervenants={intervenants}
                 onSetStatut={setEventStatut} onEdit={openEdit} onNewEvent={openNewForProject}
                 onToggleFeatured={toggleFeatured} canFeature={session.role === "chef_projet"}
+                onAckAlert={canAckAlerts ? ackAlert : null} onClearAlert={clearAlert}
                 currentAccount={currentAccount} onUpdateSelection={updateProjetsSelectionnes}
                 allCategories={allCategories}
                 canManageProjects={canManageProjects} onUpdateBudget={updateProjectBudget} onUpdateStatutFinancement={updateProjectStatutFinancement}
@@ -2981,6 +3097,9 @@ export default function App() {
                 onEdit={openEdit}
                 currentAccount={currentAccount} onUpdateSelection={updateProjetsSelectionnes}
                 allCategories={allCategories}
+                onRequestDeleteAccount={session?.role === "chef_equipe" ? setConfirmDeleteAccountId : null}
+                onAckAlert={canAckAlerts ? ackAlert : null} onClearAlert={clearAlert}
+                currentAccountId={session?.accountId}
               />
             )}
 
@@ -3006,6 +3125,7 @@ export default function App() {
               <SauvegardeTab
                 events={events} projects={projects} intervenants={intervenants} accounts={accounts}
                 tempsTravail={tempsTravail} taches={taches} financeEntries={financeEntries} financeObjectifs={financeObjectifs}
+                devisListe={devisListe} crmClients={crmClients}
                 onRestore={restoreFromBackup}
               />
             )}
@@ -3054,6 +3174,22 @@ export default function App() {
         />
       )}
 
+      {confirmDeleteCrmId && (
+        <ConfirmDialog
+          message={`Supprimer « ${(crmClients.find((c) => c.id === confirmDeleteCrmId) || {}).nom || "ce client"} » de l'annuaire ?`}
+          onCancel={() => setConfirmDeleteCrmId(null)}
+          onConfirm={() => { persistCrm(crmClients.filter((c) => c.id !== confirmDeleteCrmId)); setConfirmDeleteCrmId(null); }}
+        />
+      )}
+
+      {confirmDeleteAccountId && (
+        <ConfirmDialog
+          message={`Supprimer le compte « ${(accounts.find((a) => a.id === confirmDeleteAccountId) || {}).nom || ""} » ? La personne devra recréer son accès avec le mot de passe d'équipe.`}
+          onCancel={() => setConfirmDeleteAccountId(null)}
+          onConfirm={confirmDeleteAccount}
+        />
+      )}
+
       {confirmDeleteTacheId && (
         <ConfirmDialog
           message="Supprimer cette tâche ?"
@@ -3093,7 +3229,7 @@ export default function App() {
 /* ============================================================
    DASHBOARD
    ============================================================ */
-function Dashboard({ events: allEvents, projects, intervenants, missingInfoEvents, onSelectProject, onEditEvent, onSetStatut, canEditPlanning, taches, myIntervenantCode, onRespondDelegation }) {
+function Dashboard({ events: allEvents, projects, intervenants, missingInfoEvents, onSelectProject, onEditEvent, onSetStatut, canEditPlanning, taches, myIntervenantCode, onRespondDelegation, onAckAlert, onClearAlert }) {
   const [viewMode, setViewMode] = useState("lineaire"); // "lineaire" | "kanban"
   const [commentaires, setCommentaires] = useState({});
   // Sélection de période — mois par mois, ou une période personnalisée
@@ -3218,17 +3354,10 @@ function Dashboard({ events: allEvents, projects, intervenants, missingInfoEvent
               <span className="flex-1 h-px" style={{ background: RED + "33" }} />
             </div>
             <ul className="space-y-2">
-              {alertedEvents.map((e) => {
-                const proj = projects.find((p) => p.id === e.projetId);
-                return (
-                  <li key={e.id} className="flex items-start gap-2 text-xs">
-                    <AlertTriangle size={13} style={{ color: RED }} className="shrink-0 mt-0.5" />
-                    <span className="flex-1">
-                      <span className="font-semibold">{e.alerte.auteur}</span> — {proj?.nom} ({fmtDate(e.date)}) : {e.alerte.message}
-                    </span>
-                  </li>
-                );
-              })}
+              {alertedEvents.map((e) => (
+                <AlertListItem key={e.id} e={e} proj={projects.find((p) => p.id === e.projetId)}
+                  onAck={onAckAlert} onClear={onClearAlert} onEdit={canEditPlanning ? onEditEvent : null} />
+              ))}
             </ul>
           </div>
         )}
@@ -4192,6 +4321,50 @@ function DevisDetailView({ devis, onUpdate, onUpdateStatut, onClose, canManagePr
         </div>
 
         <div className="bg-white rounded-lg border p-4" style={{ borderColor: LINE }}>
+          <SectionLabel>Propositions d'intervention</SectionLabel>
+          <p className="text-[11px] muted mb-3">
+            Décris ce que tu proposes concrètement au client (ateliers, conférences, formations…). Le montant forfaitaire est facultatif : s'il est rempli, il s'ajoute au total du devis.
+          </p>
+          <div className="space-y-3">
+            {(d.propositions || []).map((p, i) => {
+              const setProp = (patch) => onUpdate(d.id, { propositions: (d.propositions || []).map((x, j) => (j === i ? { ...x, ...patch } : x)) });
+              return (
+                <div key={p.id || i} className="rounded-lg border p-3 space-y-2" style={{ borderColor: LINE, background: PAPER }}>
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0" style={{ background: CARE }}>{i + 1}</span>
+                    <input value={p.titre || ""} onChange={(e) => setProp({ titre: e.target.value })} placeholder="Intitulé (ex : Atelier « Bien manger à petit prix »)" className="flex-1 text-sm font-semibold border rounded-md px-2.5 py-1.5 bg-white" style={{ borderColor: LINE }} />
+                    <button
+                      onClick={() => onUpdate(d.id, { propositions: (d.propositions || []).filter((_, j) => j !== i) }, `Suppression de la proposition « ${p.titre || i + 1} »`)}
+                      title="Supprimer cette proposition" aria-label="Supprimer cette proposition" className="w-8 h-8 flex items-center justify-center shrink-0"
+                    ><Trash2 size={13} style={{ color: RED }} /></button>
+                  </div>
+                  <div className="grid sm:grid-cols-4 gap-2">
+                    <select value={p.format || ""} onChange={(e) => setProp({ format: e.target.value })} className="text-sm border rounded-md px-2 py-1.5 bg-white" style={{ borderColor: LINE }}>
+                      <option value="">Format…</option>
+                      {DEVIS_FORMATS_INTERVENTION.map((f) => <option key={f} value={f}>{f}</option>)}
+                    </select>
+                    <input value={p.public || ""} onChange={(e) => setProp({ public: e.target.value })} placeholder="Public (ex : salariés, seniors…)" className="text-sm border rounded-md px-2.5 py-1.5 bg-white" style={{ borderColor: LINE }} />
+                    <input value={p.nbSeances || ""} onChange={(e) => setProp({ nbSeances: e.target.value })} placeholder="Nb de séances" className="text-sm border rounded-md px-2.5 py-1.5 bg-white" style={{ borderColor: LINE }} />
+                    <input value={p.duree || ""} onChange={(e) => setProp({ duree: e.target.value })} placeholder="Durée (ex : 2 h)" className="text-sm border rounded-md px-2.5 py-1.5 bg-white" style={{ borderColor: LINE }} />
+                    <input value={p.periode || ""} onChange={(e) => setProp({ periode: e.target.value })} placeholder="Période (ex : mars 2027)" className="text-sm border rounded-md px-2.5 py-1.5 bg-white" style={{ borderColor: LINE }} />
+                    <input value={p.lieu || ""} onChange={(e) => setProp({ lieu: e.target.value })} placeholder="Lieu" className="text-sm border rounded-md px-2.5 py-1.5 bg-white" style={{ borderColor: LINE }} />
+                    <input value={p.intervenants || ""} onChange={(e) => setProp({ intervenants: e.target.value })} placeholder="Intervenant·es (ex : 1 diététicienne)" className="text-sm border rounded-md px-2.5 py-1.5 bg-white" style={{ borderColor: LINE }} />
+                    <input type="number" min="0" value={p.montantHT ?? ""} onChange={(e) => setProp({ montantHT: e.target.value })} placeholder="Forfait € HT (option)" className="text-sm border rounded-md px-2.5 py-1.5 bg-white" style={{ borderColor: LINE }} />
+                  </div>
+                  <textarea value={p.objectifs || ""} onChange={(e) => setProp({ objectifs: e.target.value })} rows={2} placeholder="Objectifs et contenu de l'intervention" className="w-full text-sm border rounded-md px-2.5 py-1.5 bg-white" style={{ borderColor: LINE }} />
+                </div>
+              );
+            })}
+          </div>
+          <button
+            onClick={() => onUpdate(d.id, { propositions: [...(d.propositions || []), { id: `PR${Date.now()}`, titre: "", format: "", public: "", nbSeances: "", duree: "", periode: "", lieu: "", intervenants: "", objectifs: "", montantHT: "" }] }, "Ajout d'une proposition d'intervention")}
+            className="mt-3 flex items-center gap-1 text-xs font-semibold px-3 py-1.5 rounded-md text-white" style={{ background: CARE }}
+          >
+            <Plus size={13} /> Ajouter une proposition d'intervention
+          </button>
+        </div>
+
+        <div className="bg-white rounded-lg border p-4" style={{ borderColor: LINE }}>
           <SectionLabel>Prestation — dépenses de personnel</SectionLabel>
           {(d.lignesPersonnel || []).length > 0 && (
             <div className="space-y-1 mb-3">
@@ -4273,6 +4446,7 @@ function DevisDetailView({ devis, onUpdate, onUpdateStatut, onClose, canManagePr
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <StatCard label="Intervention / Expertise" value={`${calc.interventionHT}€ HT`} color={CARE} />
             <StatCard label="Déplacement" value={`${calc.deplacementHT}€ HT`} color={CARE} />
+            {calc.propositionsHT > 0 && <StatCard label="Interventions au forfait" value={`${calc.propositionsHT}€ HT`} color={CARE} />}
             <StatCard label="Total HT" value={`${calc.totalHT}€`} color={INK} />
             <StatCard label="Total TTC (TVA 20%)" value={`${calc.totalTTC}€`} color={GREEN} />
           </div>
@@ -4332,27 +4506,51 @@ function DevisDetailView({ devis, onUpdate, onUpdateStatut, onClose, canManagePr
 // l'export PDF (bouton « Télécharger en PDF » → impression navigateur).
 function DevisPrintView({ devis: d, calc }) {
   return (
-    <div className="print-only" style={{ fontFamily: "'Poppins', sans-serif", fontSize: 12, color: "#18191A" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, borderBottom: "1px solid #ccc", paddingBottom: 8 }}>
-        <span>{DEVIS_CODE_DOCUMENT} V1</span>
-        <span>Centre d'Education en Prévention Santé « CEPS »</span>
-      </div>
-      <h1 style={{ textAlign: "center", fontSize: 20, fontWeight: 700, margin: "18px 0" }}>
-        DEVIS — Prestation d'expertise en Éducation Santé
-      </h1>
-
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
-        <div>
-          <div style={{ fontWeight: 700 }}>Destinataire</div>
-          <div>{d.destinataire?.entreprise}</div>
-          <div>{d.destinataire?.adresse}</div>
-          <div style={{ marginTop: 6 }}>{d.destinataire?.nom} {d.destinataire?.poste ? `— ${d.destinataire.poste}` : ""}</div>
-          <div>{d.destinataire?.email} {d.destinataire?.tel}</div>
+    <div className="print-only devis-print" style={{ fontFamily: "'Poppins', sans-serif", fontSize: 12, color: "#18191A" }}>
+      {/* ---------- EN-TÊTE ---------- */}
+      <div style={{ background: INK, color: "#fff", borderRadius: 14, padding: "22px 26px", display: "flex", alignItems: "center", gap: 18 }}>
+        <div style={{ width: 62, height: 62, borderRadius: 16, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <img src={BRAND_EMBLEM_SRC} alt="Institut Pasteur de Lille" style={{ width: 46, height: 41 }} />
         </div>
-        <div style={{ textAlign: "right", fontSize: 10 }}>
-          <div><strong>N° devis :</strong> {d.numeroDevis || "—"}</div>
-          <div><strong>Version :</strong> {d.version}</div>
-          <div><strong>Date :</strong> {fmtDate(d.dateEmission)}</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9.5, letterSpacing: "0.2em", color: INK_TEXT_MUTED }}>INSTITUT PASTEUR DE LILLE · CPSL</div>
+          <div style={{ fontFamily: "'Livvic', sans-serif", fontWeight: 700, fontSize: 17, lineHeight: 1.25, marginTop: 3 }}>Centre d'Education en Prévention Santé « CEPS »</div>
+          <div style={{ fontSize: 9.5, color: INK_TEXT_BODY, marginTop: 3 }}>1, rue du Pr Calmette · B.P. 245 · 59019 Lille Cedex</div>
+        </div>
+        <div style={{ textAlign: "right", flexShrink: 0 }}>
+          <div style={{ fontFamily: "'Livvic', sans-serif", fontWeight: 700, fontSize: 34, lineHeight: 1, letterSpacing: "-0.01em" }}>DEVIS</div>
+          <div style={{ fontSize: 10, color: TURQUOISE, fontWeight: 600, marginTop: 4 }}>Prestation d'expertise en Éducation Santé</div>
+        </div>
+      </div>
+      <div style={{ height: 4, background: TURQUOISE, borderRadius: 4, margin: "6px 40px 16px" }} />
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8, marginBottom: 14 }}>
+        {[
+          ["N° de devis", d.numeroDevis || "—"],
+          ["Date d'émission", fmtDate(d.dateEmission) || "—"],
+          ["Version", `V${d.version || 1}`],
+          ["Validité", "2 mois"],
+        ].map(([k, v]) => (
+          <div key={k} style={{ border: `1px solid ${LINE}`, borderRadius: 10, padding: "8px 10px", background: PAPER }}>
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 8, letterSpacing: "0.14em", textTransform: "uppercase", color: MUTED }}>{k}</div>
+            <div style={{ fontWeight: 700, fontSize: 12, color: CARE_DARK, marginTop: 2 }}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+        <div style={{ flex: 1, borderLeft: `4px solid ${CARE}`, background: PAPER, borderRadius: 8, padding: "10px 14px" }}>
+          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 8, letterSpacing: "0.14em", color: MUTED }}>DESTINATAIRE</div>
+          <div style={{ fontWeight: 700, fontSize: 13, marginTop: 2 }}>{d.destinataire?.entreprise || "—"}</div>
+          {d.destinataire?.adresse && <div style={{ fontSize: 10.5 }}>{d.destinataire.adresse}</div>}
+          <div style={{ fontSize: 10.5, marginTop: 4 }}>{d.destinataire?.nom} {d.destinataire?.poste ? `— ${d.destinataire.poste}` : ""}</div>
+          <div style={{ fontSize: 10.5 }}>{[d.destinataire?.email, d.destinataire?.tel].filter(Boolean).join(" · ")}</div>
+        </div>
+        <div style={{ width: 210, border: `1px solid ${LINE}`, borderRadius: 8, padding: "10px 14px" }}>
+          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 8, letterSpacing: "0.14em", color: MUTED }}>TYPE D'EXPERTISE</div>
+          <div style={{ fontWeight: 600, fontSize: 11.5, marginTop: 2 }}>{d.typeExpertise || "—"}</div>
+          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 8, letterSpacing: "0.14em", color: MUTED, marginTop: 8 }}>MONTANT TOTAL</div>
+          <div style={{ fontFamily: "'Livvic', sans-serif", fontWeight: 700, fontSize: 18, color: CARE }}>{calc.totalHT}€ HT</div>
         </div>
       </div>
 
@@ -4405,9 +4603,27 @@ function DevisPrintView({ devis: d, calc }) {
         Le CEPS propose des prestations d'accompagnement dans le développement de projets en éducation santé, il conduit et accompagne la mise en œuvre de projets (conseil stratégie, consulting en projet santé, appui à la méthodologie, participation à la rédaction de contenus adaptés, créations et apport d'outils pédagogiques, montée en compétences de professionnels, interventions à destination du grand public…), de conseil scientifique en nutrition (revue de la littérature, rédaction de synthèses bibliographiques…), participe à la conception de protocole de recherche-action. Il accompagne également les entreprises dans des expertises santé pour leurs collaborateurs et/ou leurs clients. Enfin, le CEPS intervient sur des publics spécifiques : vieillissement, handicap, obésité, petite enfance…
       </p>
 
+      {(d.propositions || []).length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Nos propositions d'intervention</div>
+          {(d.propositions || []).map((p, i) => (
+            <div key={p.id || i} style={{ border: `1px solid ${LINE}`, borderLeft: `4px solid ${TURQUOISE}`, borderRadius: 8, padding: "8px 12px", marginBottom: 6, breakInside: "avoid" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                <div style={{ fontWeight: 700, fontSize: 12, color: CARE_DARK }}>{i + 1}. {p.titre || "Intervention"}{p.format ? ` — ${p.format}` : ""}</div>
+                {Number(p.montantHT) > 0 && <div style={{ fontWeight: 700, fontSize: 11 }}>{Number(p.montantHT)}€ HT</div>}
+              </div>
+              <div style={{ fontSize: 10, color: MUTED, marginTop: 2 }}>
+                {[p.public && `Public : ${p.public}`, p.nbSeances && `${p.nbSeances} séance(s)`, p.duree && `Durée : ${p.duree}`, p.periode && `Période : ${p.periode}`, p.lieu && `Lieu : ${p.lieu}`, p.intervenants && `Intervenant·es : ${p.intervenants}`].filter(Boolean).join(" · ")}
+              </div>
+              {p.objectifs && <div style={{ fontSize: 10.5, marginTop: 4, lineHeight: 1.45, whiteSpace: "pre-line" }}>{p.objectifs}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+
       <div style={{ fontWeight: 700, marginBottom: 4 }}>Prestation proposée</div>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10, marginBottom: 8 }}>
-        <thead><tr style={{ background: "#EAF4F4" }}>
+        <thead><tr style={{ background: INK, color: "#fff" }}>
           <th style={{ border: "1px solid #ccc", padding: 4, textAlign: "left" }}>Détail de la prestation</th>
           <th style={{ border: "1px solid #ccc", padding: 4 }}>€ HT</th>
           <th style={{ border: "1px solid #ccc", padding: 4 }}>€ TTC</th>
@@ -4418,6 +4634,13 @@ function DevisPrintView({ devis: d, calc }) {
               <td style={{ border: "1px solid #ccc", padding: 4 }}>{l.profil} — {l.phase} ({l.nombreJournees} j)</td>
               <td style={{ border: "1px solid #ccc", padding: 4, textAlign: "right" }}>{DEVIS_TARIFS_JOUR[l.profil] * l.nombreJournees}€</td>
               <td style={{ border: "1px solid #ccc", padding: 4, textAlign: "right" }}>{Math.round(DEVIS_TARIFS_JOUR[l.profil] * l.nombreJournees * 1.2 * 100) / 100}€</td>
+            </tr>
+          ))}
+          {(d.propositions || []).filter((p) => Number(p.montantHT) > 0).map((p, i) => (
+            <tr key={`pr${i}`}>
+              <td style={{ border: "1px solid #ccc", padding: 4 }}>{p.titre || "Intervention"} (forfait)</td>
+              <td style={{ border: "1px solid #ccc", padding: 4, textAlign: "right" }}>{Number(p.montantHT)}€</td>
+              <td style={{ border: "1px solid #ccc", padding: 4, textAlign: "right" }}>{Math.round(Number(p.montantHT) * 1.2 * 100) / 100}€</td>
             </tr>
           ))}
           <tr><td style={{ border: "1px solid #ccc", padding: 4 }}>Déplacement, hébergement et repas</td>
@@ -4487,6 +4710,489 @@ function DevisPrintView({ devis: d, calc }) {
 /* ============================================================
    DEVIS — liste
    ============================================================ */
+/* ============================================================
+   CRM — ANNUAIRE DES CLIENTS
+   ------------------------------------------------------------
+   Réservé aux chef·fes de projet, au secrétariat et au·à la chef·fe
+   d'équipe. Chaque fiche client garde ses coordonnées, son statut
+   commercial et un journal des échanges. Les fichiers Excel (.xlsx,
+   .xls) ou CSV existants s'importent par glisser-déposer : les
+   colonnes sont reconnues automatiquement d'après leur titre, puis
+   ajustables avant l'import.
+   ============================================================ */
+const CRM_ROLES = new Set(["chef_projet", "secretariat", "chef_equipe"]);
+const CRM_TYPES = ["Collectivité", "Entreprise", "Association", "Établissement de santé", "Établissement scolaire", "Centre social / MDQ", "Financeur", "Autre"];
+const CRM_STATUTS = {
+  prospect: { label: "Prospect", color: PURPLE },
+  actif: { label: "Client actif", color: GREEN },
+  partenaire: { label: "Partenaire", color: CARE },
+  ancien: { label: "Ancien client", color: MUTED },
+};
+const CRM_STATUT_ORDER = ["prospect", "actif", "partenaire", "ancien"];
+// Champs d'une fiche client, et les intitulés de colonnes Excel qui y
+// correspondent (comparés sans accents, ni majuscules, ni ponctuation).
+const CRM_FIELDS = [
+  { key: "nom", label: "Structure / organisation", syn: ["structure", "organisation", "organisme", "entreprise", "societe", "raison sociale", "client", "etablissement", "nom structure", "nom de la structure", "collectivite", "partenaire", "nom entreprise", "nom client"] },
+  { key: "contact", label: "Contact (nom prénom)", syn: ["contact", "nom contact", "nom du contact", "interlocuteur", "referent", "nom prenom", "prenom nom", "responsable", "personne"] },
+  { key: "prenom", label: "Prénom (fusionné au contact)", syn: ["prenom", "prenom contact", "first name"] },
+  { key: "nomFamille", label: "Nom de famille (fusionné au contact)", syn: ["nom", "nom de famille", "last name"] },
+  { key: "fonction", label: "Fonction", syn: ["fonction", "poste", "titre", "role", "qualite"] },
+  { key: "email", label: "E-mail", syn: ["email", "e mail", "mail", "courriel", "adresse mail", "adresse email", "adresse e mail"] },
+  { key: "telephone", label: "Téléphone", syn: ["telephone", "tel", "portable", "mobile", "tel fixe", "numero", "numero de telephone", "phone"] },
+  { key: "adresse", label: "Adresse", syn: ["adresse", "rue", "adresse postale", "voie"] },
+  { key: "codePostal", label: "Code postal", syn: ["code postal", "cp", "code_postal", "postal"] },
+  { key: "ville", label: "Ville", syn: ["ville", "commune", "localite", "city"] },
+  { key: "type", label: "Type de structure", syn: ["type", "type de structure", "categorie", "secteur", "nature"] },
+  { key: "thematique", label: "Thématique / besoin", syn: ["thematique", "besoin", "domaine", "theme", "sujet", "projet"] },
+  { key: "siteWeb", label: "Site web", syn: ["site", "site web", "site internet", "web", "url"] },
+  { key: "notes", label: "Notes", syn: ["notes", "note", "commentaire", "commentaires", "remarques", "observations", "infos"] },
+];
+const crmNorm = (s) => (s ?? "").toString().normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+function crmGuessField(header) {
+  const h = crmNorm(header);
+  if (!h) return "";
+  for (const f of CRM_FIELDS) if (f.syn.includes(h)) return f.key;
+  for (const f of CRM_FIELDS) if (f.syn.some((s) => s.length > 3 && (h.startsWith(s) || h.includes(s)))) return f.key;
+  return "";
+}
+// Lecture d'un CSV (séparateur ; ou , détecté automatiquement, champs
+// entre guillemets acceptés).
+function crmParseCsv(text) {
+  const firstLine = text.split(/\r?\n/)[0] || "";
+  const sep = (firstLine.match(/;/g) || []).length >= (firstLine.match(/,/g) || []).length ? ";" : ",";
+  const rows = []; let row = []; let cur = ""; let q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"' && text[i + 1] === '"') { cur += '"'; i++; }
+      else if (c === '"') q = false;
+      else cur += c;
+    } else if (c === '"') q = true;
+    else if (c === sep) { row.push(cur); cur = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(cur); rows.push(row); row = []; cur = "";
+    } else cur += c;
+  }
+  if (cur !== "" || row.length) { row.push(cur); rows.push(row); }
+  return rows.filter((r) => r.some((x) => (x || "").trim() !== ""));
+}
+// SheetJS est chargé à la demande (seulement au premier import Excel),
+// depuis son CDN officiel, avec un second CDN en secours.
+let _xlsxLib = null;
+async function crmLoadXlsx() {
+  if (_xlsxLib) return _xlsxLib;
+  const urls = ["https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs", "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm"];
+  let lastErr;
+  for (const u of urls) {
+    try { _xlsxLib = await import(/* @vite-ignore */ u); return _xlsxLib; } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error("Lecteur Excel indisponible");
+}
+async function crmReadFile(file) {
+  const name = (file.name || "").toLowerCase();
+  if (name.endsWith(".csv") || name.endsWith(".txt")) {
+    const buf = await file.arrayBuffer();
+    let text = new TextDecoder("utf-8").decode(buf);
+    if (text.includes("�")) text = new TextDecoder("windows-1252").decode(buf);
+    return [{ name: file.name, rows: crmParseCsv(text) }];
+  }
+  if (name.endsWith(".xlsx") || name.endsWith(".xls") || name.endsWith(".xlsm") || name.endsWith(".ods")) {
+    const XLSX = await crmLoadXlsx();
+    const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    return wb.SheetNames.map((sn) => ({
+      name: `${file.name} — ${sn}`,
+      rows: XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: "", raw: false })
+        .map((r) => r.map((x) => (x ?? "").toString()))
+        .filter((r) => r.some((x) => x.trim() !== "")),
+    })).filter((s) => s.rows.length > 1);
+  }
+  throw new Error("Format non reconnu : dépose un fichier .xlsx, .xls ou .csv.");
+}
+// La ligne d'en-tête est la première des 10 premières lignes qui
+// reconnaît le plus de colonnes (certains tableaux ont un titre au-dessus).
+function crmDetectHeader(rows) {
+  let best = 0, bestScore = -1;
+  rows.slice(0, 10).forEach((r, i) => {
+    const score = r.filter((h) => crmGuessField(h)).length;
+    if (score > bestScore) { best = i; bestScore = score; }
+  });
+  return best;
+}
+const crmDupKey = (c) => crmNorm(c.email) || `${crmNorm(c.nom)}|${crmNorm(c.contact)}`;
+
+function CrmClientModal({ client, onClose, onSave, session }) {
+  const [c, setC] = useState(() => ({
+    nom: "", contact: "", fonction: "", email: "", telephone: "", adresse: "", codePostal: "", ville: "",
+    type: "", thematique: "", siteWeb: "", statut: "prospect", notes: "", echanges: [], ...client,
+  }));
+  const [newEchange, setNewEchange] = useState("");
+  const [err, setErr] = useState("");
+  const set = (patch) => setC((x) => ({ ...x, ...patch }));
+  const field = (key, label, props = {}) => (
+    <div>
+      <label className="text-[11px] font-medium block mb-1 muted">{label}</label>
+      <input value={c[key] || ""} onChange={(e) => set({ [key]: e.target.value })} className="w-full text-sm border rounded-md px-2.5 py-2" style={{ borderColor: LINE }} {...props} />
+    </div>
+  );
+  const addEchange = () => {
+    if (!newEchange.trim()) return;
+    set({ echanges: [{ date: today, auteur: session?.nom || "—", texte: newEchange.trim() }, ...(c.echanges || [])], dernierContact: today });
+    setNewEchange("");
+  };
+  const save = () => {
+    if (!c.nom.trim() && !c.contact.trim()) { setErr("Indique au moins la structure ou le contact."); return; }
+    onSave(c);
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 overflow-y-auto" style={{ background: "#0007" }}>
+      <div className="bg-white rounded-xl w-full max-w-2xl shadow-2xl my-6">
+        <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: LINE }}>
+          <h2 className="disp text-lg" style={{ fontWeight: 600 }}>{client?.id ? "Fiche client" : "Nouveau client"}</h2>
+          <button onClick={onClose} aria-label="Fermer"><X size={18} /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="grid sm:grid-cols-2 gap-3">
+            {field("nom", "Structure / organisation")}
+            <div>
+              <label className="text-[11px] font-medium block mb-1 muted">Type de structure</label>
+              <select value={c.type || ""} onChange={(e) => set({ type: e.target.value })} className="w-full text-sm border rounded-md px-2.5 py-2" style={{ borderColor: LINE }}>
+                <option value="">— À préciser —</option>
+                {[...new Set([...CRM_TYPES, ...(c.type && !CRM_TYPES.includes(c.type) ? [c.type] : [])])].map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            {field("contact", "Contact (nom prénom)")}
+            {field("fonction", "Fonction")}
+            {field("email", "E-mail", { type: "email" })}
+            {field("telephone", "Téléphone")}
+            {field("adresse", "Adresse")}
+            <div className="grid grid-cols-3 gap-2">
+              <div className="col-span-1">{field("codePostal", "Code postal")}</div>
+              <div className="col-span-2">{field("ville", "Ville")}</div>
+            </div>
+            {field("thematique", "Thématique / besoin")}
+            {field("siteWeb", "Site web")}
+          </div>
+          <div>
+            <label className="text-[11px] font-medium block mb-1 muted">Statut</label>
+            <div className="flex flex-wrap gap-2">
+              {CRM_STATUT_ORDER.map((k) => {
+                const m = CRM_STATUTS[k]; const on = c.statut === k;
+                return (
+                  <button key={k} onClick={() => set({ statut: k })} className="text-xs font-semibold px-3 py-1.5 rounded-full border"
+                    style={{ borderColor: m.color, background: on ? m.color : "transparent", color: on ? "#fff" : m.color }}>{m.label}</button>
+                );
+              })}
+            </div>
+          </div>
+          <div>
+            <label className="text-[11px] font-medium block mb-1 muted">Notes</label>
+            <textarea value={c.notes || ""} onChange={(e) => set({ notes: e.target.value })} rows={3} className="w-full text-sm border rounded-md px-2.5 py-2" style={{ borderColor: LINE }} />
+          </div>
+          <div className="rounded-lg border p-3" style={{ borderColor: LINE, background: PAPER }}>
+            <div className="text-[11px] font-mono uppercase tracking-wide muted mb-2">Journal des échanges</div>
+            <div className="flex gap-2 mb-2">
+              <input value={newEchange} onChange={(e) => setNewEchange(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addEchange(); }}
+                placeholder="ex : appel, devis envoyé, rendez-vous fixé…" className="flex-1 text-sm border rounded-md px-2.5 py-1.5 bg-white" style={{ borderColor: LINE }} />
+              <button onClick={addEchange} className="text-xs font-semibold px-3 py-1.5 rounded-md text-white" style={{ background: CARE }}>Ajouter</button>
+            </div>
+            {(c.echanges || []).length === 0 ? (
+              <p className="text-xs muted">Aucun échange noté pour l'instant.</p>
+            ) : (
+              <ul className="space-y-1">
+                {c.echanges.map((x, i) => (
+                  <li key={i} className="text-xs flex gap-2">
+                    <span className="mono muted shrink-0 w-20">{fmtDate(x.date)}</span>
+                    <span className="flex-1">{x.texte} <span className="muted">— {x.auteur}</span></span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          {c.source && <p className="text-[11px] muted">Importé depuis : {c.source}</p>}
+          {err && <p className="text-xs" style={{ color: RED }}>{err}</p>}
+        </div>
+        <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: LINE }}>
+          <button onClick={onClose} className="text-sm font-medium px-4 py-2 rounded-md border" style={{ borderColor: LINE }}>Annuler</button>
+          <button onClick={save} className="flex items-center gap-1.5 text-sm font-semibold text-white px-4 py-2 rounded-md" style={{ background: CARE }}><Save size={14} /> Enregistrer</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CrmImportModal({ sheets, existing, onClose, onImport }) {
+  const [sheetIdx, setSheetIdx] = useState(0);
+  const sheet = sheets[sheetIdx];
+  const headerRow = useMemo(() => crmDetectHeader(sheet.rows), [sheet]);
+  const headers = sheet.rows[headerRow] || [];
+  const [mapping, setMapping] = useState(() => headers.map((h) => crmGuessField(h)));
+  useEffect(() => { setMapping(headers.map((h) => crmGuessField(h))); /* eslint-disable-next-line */ }, [sheetIdx]);
+  const [dupMode, setDupMode] = useState("skip"); // "skip" | "update"
+  const dataRows = sheet.rows.slice(headerRow + 1);
+
+  const parsed = useMemo(() => dataRows.map((r) => {
+    const c = {};
+    mapping.forEach((k, i) => {
+      if (!k) return;
+      const v = (r[i] ?? "").toString().trim();
+      if (!v) return;
+      c[k] = c[k] ? `${c[k]} ${v}` : v;
+    });
+    if (c.prenom || c.nomFamille) {
+      c.contact = [c.contact, c.prenom, c.nomFamille].filter(Boolean).join(" ");
+      delete c.prenom; delete c.nomFamille;
+    }
+    if (c.type) {
+      const t = CRM_TYPES.find((x) => crmNorm(x) === crmNorm(c.type));
+      if (t) c.type = t;
+    }
+    return c;
+  }).filter((c) => c.nom || c.contact || c.email), [dataRows, mapping]);
+
+  const existingKeys = useMemo(() => new Set(existing.map(crmDupKey)), [existing]);
+  const dups = parsed.filter((c) => existingKeys.has(crmDupKey(c))).length;
+  const mappedCount = mapping.filter(Boolean).length;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 overflow-y-auto" style={{ background: "#0007" }}>
+      <div className="bg-white rounded-xl w-full max-w-3xl shadow-2xl my-6">
+        <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: LINE }}>
+          <h2 className="disp text-lg" style={{ fontWeight: 600 }}>Importer dans l'annuaire</h2>
+          <button onClick={onClose} aria-label="Fermer"><X size={18} /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          {sheets.length > 1 && (
+            <div>
+              <label className="text-[11px] font-medium block mb-1 muted">Feuille à importer</label>
+              <select value={sheetIdx} onChange={(e) => setSheetIdx(Number(e.target.value))} className="text-sm border rounded-md px-2.5 py-1.5" style={{ borderColor: LINE }}>
+                {sheets.map((s, i) => <option key={i} value={i}>{s.name} ({s.rows.length - 1} lignes)</option>)}
+              </select>
+            </div>
+          )}
+          <div className="rounded-md p-3 text-sm" style={{ background: PAPER }}>
+            <b>{parsed.length}</b> contact{parsed.length > 1 ? "s" : ""} trouvé{parsed.length > 1 ? "s" : ""} dans <b>{sheet.name}</b> · {mappedCount} colonne{mappedCount > 1 ? "s" : ""} reconnue{mappedCount > 1 ? "s" : ""}
+            {dups > 0 && <> · <span style={{ color: AMBER }} className="font-semibold">{dups} déjà dans l'annuaire</span></>}
+          </div>
+          <div>
+            <div className="text-[11px] font-mono uppercase tracking-wide muted mb-2">Correspondance des colonnes</div>
+            <div className="grid sm:grid-cols-2 gap-x-5 gap-y-2 max-h-72 overflow-y-auto pr-1">
+              {headers.map((h, i) => (
+                <div key={i} className="flex items-center gap-2 text-sm">
+                  <span className="flex-1 min-w-0 truncate" title={h}>{h || <span className="muted">(colonne {i + 1})</span>}</span>
+                  <span className="muted">→</span>
+                  <select value={mapping[i] || ""} onChange={(e) => setMapping((m) => m.map((x, j) => (j === i ? e.target.value : x)))}
+                    className="text-xs border rounded-md px-2 py-1 w-48" style={{ borderColor: mapping[i] ? CARE : LINE }}>
+                    <option value="">Ne pas importer</option>
+                    {CRM_FIELDS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>
+          </div>
+          {parsed.length > 0 && (
+            <div>
+              <div className="text-[11px] font-mono uppercase tracking-wide muted mb-2">Aperçu (3 premiers)</div>
+              <div className="space-y-1 text-xs">
+                {parsed.slice(0, 3).map((c, i) => (
+                  <div key={i} className="rounded border px-2.5 py-1.5" style={{ borderColor: LINE }}>
+                    <b>{c.nom || "—"}</b>{c.contact ? ` · ${c.contact}` : ""}{c.fonction ? ` (${c.fonction})` : ""}{c.email ? ` · ${c.email}` : ""}{c.telephone ? ` · ${c.telephone}` : ""}{c.ville ? ` · ${c.ville}` : ""}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {dups > 0 && (
+            <div className="flex flex-wrap gap-4 text-sm">
+              <label className="flex items-center gap-1.5"><input type="radio" checked={dupMode === "skip"} onChange={() => setDupMode("skip")} /> Ignorer les doublons</label>
+              <label className="flex items-center gap-1.5"><input type="radio" checked={dupMode === "update"} onChange={() => setDupMode("update")} /> Compléter les fiches existantes</label>
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 px-5 py-4 border-t" style={{ borderColor: LINE }}>
+          <button onClick={onClose} className="text-sm font-medium px-4 py-2 rounded-md border" style={{ borderColor: LINE }}>Annuler</button>
+          <button disabled={parsed.length === 0} onClick={() => onImport(parsed, dupMode, sheet.name)}
+            className="flex items-center gap-1.5 text-sm font-semibold text-white px-4 py-2 rounded-md disabled:opacity-40" style={{ background: CARE }}>
+            <Upload size={14} /> Importer {parsed.length} contact{parsed.length > 1 ? "s" : ""}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CrmTab({ clients, onSave, onRequestDelete, onImport, session }) {
+  const [search, setSearch] = useState("");
+  const [fType, setFType] = useState("all");
+  const [fStatut, setFStatut] = useState("all");
+  const [editing, setEditing] = useState(null); // client | {} (nouveau) | null
+  const [dragOver, setDragOver] = useState(false);
+  const [importSheets, setImportSheets] = useState(null);
+  const [importMsg, setImportMsg] = useState("");
+  const [importErr, setImportErr] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState("");
+  const fileRef = useRef(null);
+
+  const filtered = useMemo(() => {
+    const q = crmNorm(search);
+    return clients
+      .filter((c) => fType === "all" || c.type === fType)
+      .filter((c) => fStatut === "all" || (c.statut || "prospect") === fStatut)
+      .filter((c) => !q || crmNorm([c.nom, c.contact, c.fonction, c.email, c.telephone, c.ville, c.thematique, c.notes].join(" ")).includes(q))
+      .sort((a, b) => (a.nom || a.contact || "").localeCompare(b.nom || b.contact || "", "fr"));
+  }, [clients, search, fType, fStatut]);
+
+  const counts = useMemo(() => {
+    const m = { total: clients.length };
+    CRM_STATUT_ORDER.forEach((k) => { m[k] = clients.filter((c) => (c.statut || "prospect") === k).length; });
+    return m;
+  }, [clients]);
+  const typesUsed = useMemo(() => [...new Set([...CRM_TYPES, ...clients.map((c) => c.type).filter(Boolean)])], [clients]);
+
+  const handleFiles = async (files) => {
+    setImportErr(""); setImportMsg("");
+    const f = files && files[0];
+    if (!f) return;
+    setLoading(true);
+    try {
+      const sheets = await crmReadFile(f);
+      if (!sheets.length || !sheets.some((s) => s.rows.length > 1)) throw new Error("Aucune donnée trouvée dans ce fichier.");
+      setImportSheets(sheets.filter((s) => s.rows.length > 1));
+    } catch (e) {
+      setImportErr(e?.message?.includes("Format") || e?.message?.includes("Aucune")
+        ? e.message
+        : "Impossible de lire ce fichier Excel (connexion au lecteur Excel impossible ?). Tu peux aussi l'enregistrer en CSV depuis Excel puis le déposer.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const doImport = (rows, dupMode, source) => {
+    const res = onImport(rows, dupMode, source);
+    setImportSheets(null);
+    setImportMsg(`${res.added} contact(s) ajouté(s)${res.updated ? `, ${res.updated} fiche(s) complétée(s)` : ""}${res.skipped ? `, ${res.skipped} doublon(s) ignoré(s)` : ""}.`);
+  };
+
+  const copyForExcel = () => {
+    const cols = ["nom", "type", "contact", "fonction", "email", "telephone", "adresse", "codePostal", "ville", "thematique", "statut", "dernierContact", "notes"];
+    const head = ["Structure", "Type", "Contact", "Fonction", "E-mail", "Téléphone", "Adresse", "Code postal", "Ville", "Thématique", "Statut", "Dernier contact", "Notes"];
+    const esc = (v) => (v ?? "").toString().replace(/\t|\n/g, " ");
+    const text = [head.join("\t"), ...filtered.map((c) => cols.map((k) => esc(k === "statut" ? CRM_STATUTS[c.statut || "prospect"]?.label : c[k])).join("\t"))].join("\n");
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.left = "-9999px";
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (err) { ok = false; }
+    document.body.removeChild(ta);
+    setCopied(ok ? `${filtered.length} ligne(s) copiée(s) : colle-les dans Excel.` : "Copie impossible depuis ce navigateur.");
+    setTimeout(() => setCopied(""), 4000);
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <StatCard label="Clients dans l'annuaire" value={counts.total} color={INK} />
+        {CRM_STATUT_ORDER.map((k) => <StatCard key={k} label={CRM_STATUTS[k].label} value={counts[k]} color={CRM_STATUTS[k].color} />)}
+      </div>
+
+      <div
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
+        onClick={() => fileRef.current?.click()}
+        role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter") fileRef.current?.click(); }}
+        className="rounded-lg border-2 border-dashed p-6 text-center cursor-pointer transition"
+        style={{ borderColor: dragOver ? CARE : LINE, background: dragOver ? CARE + "10" : "#fff" }}
+      >
+        <Upload size={26} style={{ color: CARE }} className="mx-auto mb-2" />
+        <div className="text-sm font-semibold" style={{ color: CARE_DARK }}>{loading ? "Lecture du fichier…" : "Glisse ici ton fichier Excel ou CSV pour enrichir l'annuaire"}</div>
+        <div className="text-xs muted mt-1">ou clique pour le choisir · .xlsx, .xls, .csv · les colonnes sont reconnues automatiquement</div>
+        <input ref={fileRef} type="file" accept=".xlsx,.xls,.xlsm,.ods,.csv,.txt" className="hidden" onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
+      </div>
+      {importErr && <p className="text-sm" style={{ color: RED }}>{importErr}</p>}
+      {importMsg && <p className="text-sm font-medium" style={{ color: GREEN }}>✓ {importMsg}</p>}
+
+      <div className="bg-white rounded-lg border p-4 flex flex-wrap items-center gap-3" style={{ borderColor: LINE }}>
+        <div className="relative flex-1 min-w-[220px]">
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 muted" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Rechercher une structure, un contact, une ville…" className="w-full text-sm border rounded-md pl-8 pr-2.5 py-2" style={{ borderColor: LINE }} />
+        </div>
+        <select value={fType} onChange={(e) => setFType(e.target.value)} className="text-sm border rounded-md px-2.5 py-2" style={{ borderColor: LINE }}>
+          <option value="all">Tous les types</option>
+          {typesUsed.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <select value={fStatut} onChange={(e) => setFStatut(e.target.value)} className="text-sm border rounded-md px-2.5 py-2" style={{ borderColor: LINE }}>
+          <option value="all">Tous les statuts</option>
+          {CRM_STATUT_ORDER.map((k) => <option key={k} value={k}>{CRM_STATUTS[k].label}</option>)}
+        </select>
+        <button onClick={copyForExcel} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-md border" style={{ borderColor: LINE, color: CARE_DARK }}><Copy size={13} /> Copier pour Excel</button>
+        <button onClick={() => setEditing({})} className="flex items-center gap-1.5 text-xs font-bold px-3.5 py-2 rounded-md text-white" style={{ background: AMBER }}><Plus size={14} /> Nouveau client</button>
+      </div>
+      {copied && <p className="text-xs" style={{ color: GREEN }}>{copied}</p>}
+
+      <div className="bg-white rounded-lg border overflow-hidden" style={{ borderColor: LINE }}>
+        <div className="px-4 pt-4"><SectionLabel>Annuaire des clients ({filtered.length})</SectionLabel></div>
+        {filtered.length === 0 ? (
+          <p className="text-sm muted px-4 pb-6">{clients.length === 0 ? "L'annuaire est vide : ajoute un client ou dépose un fichier Excel ci-dessus." : "Aucun client ne correspond à ces filtres."}</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-[11px] uppercase tracking-wide" style={{ background: PAPER_DARK, color: CARE_DARK }}>
+                  <th className="px-4 py-2 font-semibold">Structure</th>
+                  <th className="px-3 py-2 font-semibold">Contact</th>
+                  <th className="px-3 py-2 font-semibold">Coordonnées</th>
+                  <th className="px-3 py-2 font-semibold">Ville</th>
+                  <th className="px-3 py-2 font-semibold">Statut</th>
+                  <th className="px-3 py-2 font-semibold">Dernier échange</th>
+                  <th className="px-3 py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((c) => {
+                  const st = CRM_STATUTS[c.statut || "prospect"];
+                  return (
+                    <tr key={c.id} className="border-t hover:bg-slate-50 cursor-pointer" style={{ borderColor: LINE }} onClick={() => setEditing(c)}>
+                      <td className="px-4 py-2.5">
+                        <div className="font-semibold" style={{ color: CARE_DARK }}>{c.nom || "—"}</div>
+                        <div className="text-[11px] muted">{[c.type, c.thematique].filter(Boolean).join(" · ")}</div>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <div>{c.contact || "—"}</div>
+                        {c.fonction && <div className="text-[11px] muted">{c.fonction}</div>}
+                      </td>
+                      <td className="px-3 py-2.5 text-xs">
+                        {c.email && <div className="flex items-center gap-1"><Mail size={11} className="muted" /> {c.email}</div>}
+                        {c.telephone && <div className="flex items-center gap-1"><Phone size={11} className="muted" /> {c.telephone}</div>}
+                      </td>
+                      <td className="px-3 py-2.5 text-xs">{[c.codePostal, c.ville].filter(Boolean).join(" ") || "—"}</td>
+                      <td className="px-3 py-2.5"><span className="text-[11px] font-semibold px-2 py-0.5 rounded-full" style={{ background: st.color + "1a", color: st.color }}>{st.label}</span></td>
+                      <td className="px-3 py-2.5 text-xs mono">{c.dernierContact ? fmtDate(c.dernierContact) : "—"}</td>
+                      <td className="px-3 py-2.5 text-right">
+                        <button onClick={(e) => { e.stopPropagation(); onRequestDelete(c.id); }} title={`Supprimer ${c.nom || c.contact}`} aria-label="Supprimer ce client" className="w-8 h-8 inline-flex items-center justify-center rounded hover:bg-red-50">
+                          <Trash2 size={13} style={{ color: RED }} />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {editing && (
+        <CrmClientModal client={editing} session={session} onClose={() => setEditing(null)} onSave={(c) => { onSave(c); setEditing(null); }} />
+      )}
+      {importSheets && (
+        <CrmImportModal sheets={importSheets} existing={clients} onClose={() => setImportSheets(null)} onImport={doImport} />
+      )}
+    </div>
+  );
+}
+
 function DevisTab({ devisListe, session, onCreate, onOpen, onRequestDelete }) {
   const [showNew, setShowNew] = useState(false);
   const [filterStatut, setFilterStatut] = useState("all");
@@ -5186,6 +5892,64 @@ function WorkloadTab({ intervenants, events, allIntervenantCodes, tempsTravail, 
   }, [displayedPeople, metric, intervenants]);
   const pieTotal = pieData.reduce((s, d) => s + d.value, 0);
 
+  // ---- Valorisation des heures : planifié + trajets + déclaré, par
+  // professionnel·le ou par métier, en suivant les filtres ci-dessus
+  // (métier, personne, total min/max).
+  const [valoMode, setValoMode] = useState("person"); // "person" | "metier"
+  const r2 = (x) => Math.round(x * 100) / 100;
+  const valoData = useMemo(() => {
+    const parts = (w) => ({
+      planifie: r2(Math.max(0, w.hours - w.travel - w.declared)),
+      trajet: r2(w.travel),
+      declare: r2(w.declared),
+    });
+    if (valoMode === "person") {
+      return displayedPeople
+        .map((w) => {
+          const meta = intervenants.find((i) => i.code === w.code);
+          return { name: w.code, label: meta?.nomComplet ? `${w.code} — ${meta.nomComplet}` : w.code, ...parts(w) };
+        })
+        .map((d) => ({ ...d, total: r2(d.planifie + d.trajet + d.declare) }))
+        .filter((d) => d.total > 0)
+        .sort((a, b) => b.total - a.total);
+    }
+    const metiers = selectedMetier === "all"
+      ? Array.from(new Set([...PROFESSIONS, ...intervenants.flatMap((i) => intervenantMetiers(i))]))
+      : [selectedMetier];
+    return metiers
+      .map((m) => {
+        const acc = { name: m, label: m, planifie: 0, trajet: 0, declare: 0, personnes: 0 };
+        displayedPeople.forEach((w) => {
+          const meta = intervenants.find((i) => i.code === w.code);
+          const ms = intervenantMetiers(meta);
+          const inM = ms.length ? ms.includes(m) : m === "À définir";
+          if (!inM) return;
+          const p = parts(w);
+          acc.planifie += p.planifie; acc.trajet += p.trajet; acc.declare += p.declare; acc.personnes += 1;
+        });
+        return { ...acc, planifie: r2(acc.planifie), trajet: r2(acc.trajet), declare: r2(acc.declare), total: r2(acc.planifie + acc.trajet + acc.declare) };
+      })
+      .filter((d) => d.total > 0)
+      .sort((a, b) => b.total - a.total);
+  }, [valoMode, displayedPeople, intervenants, selectedMetier]);
+  const valoTotals = useMemo(() => valoData.reduce((t, d) => ({
+    planifie: r2(t.planifie + d.planifie), trajet: r2(t.trajet + d.trajet), declare: r2(t.declare + d.declare),
+  }), { planifie: 0, trajet: 0, declare: 0 }), [valoData]);
+  // Temps déclarés de la sélection, ventilés par nature (mêmes catégories
+  // que « Gestion humaine »).
+  const declaredByNature = useMemo(() => {
+    const codes = new Set(displayedPeople.map((w) => w.code));
+    const m = {};
+    Object.entries(declaredByCode).forEach(([code, entries]) => {
+      if (!codes.has(code)) return;
+      entries.forEach((t) => { m[t.categorieId || "autre"] = (m[t.categorieId || "autre"] || 0) + (t.duree || 0); });
+    });
+    return TEMPS_TRAVAIL_CATEGORIES
+      .map((c) => ({ name: c.label, value: r2(m[c.id] || 0), color: c.color }))
+      .filter((d) => d.value > 0)
+      .sort((a, b) => b.value - a.value);
+  }, [declaredByCode, displayedPeople]);
+
   return (
     <div className="space-y-5">
       <div className="bg-white rounded-lg border p-4 flex flex-wrap items-center gap-3" style={{ borderColor: LINE }}>
@@ -5337,6 +6101,74 @@ function WorkloadTab({ intervenants, events, allIntervenantCodes, tempsTravail, 
           </p>
         </div>
       )}
+
+      <div className="bg-white rounded-lg border p-5" style={{ borderColor: LINE }}>
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-1">
+          <SectionLabel>Heures valorisées — {valoMode === "person" ? "par professionnel·le" : "par métier"}</SectionLabel>
+          <div className="flex rounded-md border overflow-hidden" style={{ borderColor: LINE }}>
+            <button onClick={() => setValoMode("person")} className="text-xs font-semibold px-3 py-1.5"
+              style={{ background: valoMode === "person" ? CARE : "transparent", color: valoMode === "person" ? "#fff" : INK }}>Par professionnel·le</button>
+            <button onClick={() => setValoMode("metier")} className="text-xs font-semibold px-3 py-1.5"
+              style={{ background: valoMode === "metier" ? CARE : "transparent", color: valoMode === "metier" ? "#fff" : INK }}>Par métier</button>
+          </div>
+        </div>
+        <p className="text-xs muted mb-4">
+          Toutes les heures de la sélection (filtres métier, personne et total ci-dessus) : actions planifiées dans l'agenda, trajets, et temps de travail déclarés dans « Mon espace » ou « Gérer mon temps ».
+        </p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+          {[
+            { l: "Heures valorisées", v: r2(valoTotals.planifie + valoTotals.trajet + valoTotals.declare), c: INK },
+            { l: "Actions planifiées", v: valoTotals.planifie, c: CARE },
+            { l: "Trajets", v: valoTotals.trajet, c: AMBER },
+            { l: "Temps déclarés", v: valoTotals.declare, c: PURPLE },
+          ].map((k) => (
+            <div key={k.l} className="rounded-md border p-3" style={{ borderColor: LINE, borderLeft: `3px solid ${k.c}` }}>
+              <div className="disp text-xl" style={{ fontWeight: 600, color: k.c }}>{k.v}h</div>
+              <div className="text-[10px] muted uppercase tracking-wide">{k.l}</div>
+            </div>
+          ))}
+        </div>
+        {valoData.length === 0 ? (
+          <p className="text-sm muted">Aucune heure sur cette sélection.</p>
+        ) : (
+          <div style={{ height: Math.max(160, valoData.length * 34 + 60) }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={valoData} layout="vertical" margin={{ top: 4, right: 24, left: 8, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={LINE} horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 11 }} unit="h" />
+                <YAxis type="category" dataKey="label" width={valoMode === "person" ? 170 : 210} tick={{ fontSize: 11 }} />
+                <Tooltip formatter={(v, n) => [`${v} h`, n]} />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Bar dataKey="planifie" name="Actions planifiées" stackId="h" fill={CARE} />
+                <Bar dataKey="trajet" name="Trajets" stackId="h" fill={AMBER} />
+                <Bar dataKey="declare" name="Temps déclarés" stackId="h" fill={PURPLE} radius={[0, 4, 4, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+        {valoMode === "metier" && selectedMetier === "all" && (
+          <p className="text-[10.5px] muted mt-2">Une personne qui exerce plusieurs métiers est comptée dans chacun d'eux.</p>
+        )}
+        {declaredByNature.length > 0 && (
+          <div className="mt-5">
+            <div className="text-[11px] font-mono uppercase tracking-wide muted mb-2">Temps déclarés de la sélection, par nature</div>
+            <div className="space-y-1.5">
+              {declaredByNature.map((d) => {
+                const max = declaredByNature[0].value || 1;
+                return (
+                  <div key={d.name} className="flex items-center gap-2 text-xs">
+                    <span className="w-64 shrink-0 truncate">{d.name}</span>
+                    <div className="flex-1 h-3 rounded" style={{ background: PAPER_DARK }}>
+                      <div className="h-3 rounded" style={{ width: `${(d.value / max) * 100}%`, background: d.color }} />
+                    </div>
+                    <span className="mono w-14 text-right font-semibold">{d.value}h</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
 
       {selectedPerson !== "all" && (
         <div className="bg-white rounded-lg border p-5" style={{ borderColor: LINE }}>
@@ -6194,7 +7026,7 @@ function NouveauProjetModal({ allCategories, onClose, onCreate }) {
   );
 }
 
-function MesProjetsTab({ session, projects, events, intervenants, onSetStatut, onEdit, onNewEvent, onToggleFeatured, canFeature, currentAccount, onUpdateSelection, allCategories, canManageProjects, onUpdateBudget, onUpdateStatutFinancement, onCreateProject }) {
+function MesProjetsTab({ session, projects, events, intervenants, onSetStatut, onEdit, onNewEvent, onToggleFeatured, canFeature, currentAccount, onUpdateSelection, allCategories, canManageProjects, onUpdateBudget, onUpdateStatutFinancement, onCreateProject, onAckAlert, onClearAlert }) {
   const explicitIds = currentAccount?.projetsSelectionnes;
   const hasExplicit = Array.isArray(explicitIds);
   const mine = useMemo(() => {
@@ -6246,18 +7078,10 @@ function MesProjetsTab({ session, projects, events, intervenants, onSetStatut, o
             <span className="flex-1 h-px" style={{ background: RED + "33" }} />
           </div>
           <ul className="space-y-2">
-            {alertedEvents.map((e) => {
-              const proj = projects.find((p) => p.id === e.projetId);
-              return (
-                <li key={e.id} className="flex items-start gap-2 text-xs">
-                  <AlertTriangle size={13} style={{ color: RED }} className="shrink-0 mt-0.5" />
-                  <span className="flex-1">
-                    <span className="font-semibold">{e.alerte.auteur}</span> — {proj?.nom} ({fmtDate(e.date)}) : {e.alerte.message}
-                  </span>
-                  <button onClick={() => onEdit(e)} className="text-xs font-medium shrink-0" style={{ color: CARE_DARK }}>Ouvrir →</button>
-                </li>
-              );
-            })}
+            {alertedEvents.map((e) => (
+              <AlertListItem key={e.id} e={e} proj={projects.find((p) => p.id === e.projetId)}
+                onAck={onAckAlert} onClear={onClearAlert} onEdit={onEdit} />
+            ))}
           </ul>
         </div>
       )}
@@ -6485,7 +7309,7 @@ function SecretariatTab({ projects, events, onUpdateProjectMeta, financeEntries,
 /* ============================================================
    PILOTAGE — vue globale du·de la chef·fe d'équipe
    ============================================================ */
-function PilotageTab({ projects: allProjects, events: allEvents, intervenants, accounts, onGoToProject, onEdit, currentAccount, onUpdateSelection, allCategories }) {
+function PilotageTab({ projects: allProjects, events: allEvents, intervenants, accounts, onGoToProject, onEdit, currentAccount, onUpdateSelection, allCategories, onRequestDeleteAccount, currentAccountId, onAckAlert, onClearAlert }) {
   const [showPicker, setShowPicker] = useState(false);
   const filterIds = currentAccount?.projetsSelectionnes;
   const isFiltered = Array.isArray(filterIds) && filterIds.length > 0;
@@ -6531,7 +7355,7 @@ function PilotageTab({ projects: allProjects, events: allEvents, intervenants, a
 
   const roster = useMemo(() => {
     const m = {};
-    accounts.forEach((a) => { (m[a.role] = m[a.role] || []).push(a.nom); });
+    accounts.forEach((a) => { (m[a.role] = m[a.role] || []).push(a); });
     return m;
   }, [accounts]);
 
@@ -6574,18 +7398,10 @@ function PilotageTab({ projects: allProjects, events: allEvents, intervenants, a
             <span className="flex-1 h-px" style={{ background: RED + "33" }} />
           </div>
           <ul className="space-y-2">
-            {alertedEvents.map((e) => {
-              const proj = projects.find((p) => p.id === e.projetId);
-              return (
-                <li key={e.id} className="flex items-start gap-2 text-xs">
-                  <AlertTriangle size={13} style={{ color: RED }} className="shrink-0 mt-0.5" />
-                  <span className="flex-1">
-                    <span className="font-semibold">{e.alerte.auteur}</span> — {proj?.nom} ({fmtDate(e.date)}) : {e.alerte.message}
-                  </span>
-                  {onEdit && <button onClick={() => onEdit(e)} className="text-xs font-medium shrink-0" style={{ color: CARE_DARK }}>Ouvrir →</button>}
-                </li>
-              );
-            })}
+            {alertedEvents.map((e) => (
+              <AlertListItem key={e.id} e={e} proj={projects.find((p) => p.id === e.projetId)}
+                onAck={onAckAlert} onClear={onClearAlert} onEdit={onEdit} />
+            ))}
           </ul>
         </div>
       )}
@@ -6666,8 +7482,30 @@ function PilotageTab({ projects: allProjects, events: allEvents, intervenants, a
               {(roster[r.id] || []).length === 0 ? (
                 <p className="text-xs muted">Personne pour l'instant</p>
               ) : (
-                <ul className="text-xs space-y-0.5">
-                  {(roster[r.id] || []).map((n, i) => <li key={i} className="muted">{n}</li>)}
+                <ul className="text-xs space-y-1">
+                  {(roster[r.id] || []).map((a) => {
+                    const norm = (x) => (x || "").trim().toLowerCase();
+                    const isDup = (roster[r.id] || []).filter((o) => norm(o.nom) === norm(a.nom)).length > 1;
+                    const isMe = a.id === currentAccountId;
+                    return (
+                      <li key={a.id} className="flex items-center gap-1.5 group">
+                        <span className="muted flex-1 min-w-0 truncate">{a.nom}{isMe ? " (toi)" : ""}</span>
+                        {isDup && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ background: AMBER + "22", color: AMBER }} title="Plusieurs comptes portent ce nom dans ce rôle">doublon ?</span>
+                        )}
+                        {onRequestDeleteAccount && !isMe && (
+                          <button
+                            onClick={() => onRequestDeleteAccount(a.id)}
+                            title={`Supprimer le compte de ${a.nom}`} aria-label={`Supprimer le compte de ${a.nom}`}
+                            className="shrink-0 w-6 h-6 rounded flex items-center justify-center hover:bg-red-50"
+                            style={{ color: RED }}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>
@@ -6938,7 +7776,7 @@ function TachesTab({ session, taches, onAdd, onUpdate, onRequestDelete, allInter
    réimporté en cas de besoin (perte de données, changement de
    compte…). Les mots de passe sont retirés par sécurité.
    ============================================================ */
-function SauvegardeTab({ events, projects, intervenants, accounts, tempsTravail, taches, financeEntries, financeObjectifs, onRestore }) {
+function SauvegardeTab({ events, projects, intervenants, accounts, tempsTravail, taches, financeEntries, financeObjectifs, devisListe, crmClients, onRestore }) {
   const [copyState, setCopyState] = useState("");
   const [showText, setShowText] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -6958,8 +7796,8 @@ function SauvegardeTab({ events, projects, intervenants, accounts, tempsTravail,
     },
     events, projects, intervenants,
     accounts: accounts.map((a) => ({ ...a, password: "••• retiré de la sauvegarde pour la sécurité •••" })),
-    tempsTravail, taches, financeEntries, financeObjectifs,
-  }), [events, projects, intervenants, accounts, tempsTravail, taches, financeEntries, financeObjectifs]);
+    tempsTravail, taches, financeEntries, financeObjectifs, devis: devisListe || [], crmClients: crmClients || [],
+  }), [events, projects, intervenants, accounts, tempsTravail, taches, financeEntries, financeObjectifs, devisListe, crmClients]);
 
   const backupText = useMemo(() => JSON.stringify(backupPayload, null, 2), [backupPayload]);
 
@@ -7261,10 +8099,7 @@ function GestionHumaineTab({ events, intervenants, accounts, tempsTravail, allIn
           </div>
           <ul className="space-y-2">
             {alertedEvents.map((e) => (
-              <li key={e.id} className="flex items-start gap-2 text-xs">
-                <AlertTriangle size={13} style={{ color: RED }} className="shrink-0 mt-0.5" />
-                <span className="flex-1"><span className="font-semibold">{e.alerte.auteur}</span> — {fmtDate(e.date)} : {e.alerte.message}</span>
-              </li>
+              <AlertListItem key={e.id} e={e} proj={null} />
             ))}
           </ul>
         </div>
